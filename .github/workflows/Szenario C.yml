@@ -1,0 +1,202 @@
+name: scenario-c-fail-fast-flask
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+
+  # -------------------
+  # SAST - Bandit + Semgrep
+  # -------------------
+  sast:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Prepare directories
+        run: mkdir -p results/raw
+
+      # --- Bandit ---
+      - name: Install Python & Bandit
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Bandit
+        run: |
+          pip install bandit
+          bandit -r . -f json -o results/raw/bandit.json || exit 1
+
+      # --- Semgrep ---
+      - name: Run Semgrep
+        run: |
+          docker run --rm \
+            --cpus="2" --memory="4g" \
+            -v "$PWD:/src" \
+            returntocorp/semgrep:1.75.0 \
+            semgrep scan --config=p/ci \
+              --json \
+              --output=/src/results/raw/semgrep.json \
+              --metrics=off || exit 1
+
+      - name: Check for critical SAST findings
+        run: |
+          CRITICAL_COUNT=$(jq '.results | map(select(.severity=="critical")) | length' results/raw/semgrep.json)
+          echo "Critical findings: $CRITICAL_COUNT"
+          if [ "$CRITICAL_COUNT" -gt 0 ]; then
+            echo "Critical SAST findings found, aborting workflow."
+            exit 1
+          fi
+
+      - name: Upload SAST reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-reports
+          path: results/raw
+          if-no-files-found: warn
+
+  # -------------------
+  # SCA - Trivy FS
+  # -------------------
+  sca:
+    runs-on: self-hosted
+    needs: sast
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Run Trivy FS Scan
+        run: |
+          docker run --rm \
+            --cpus="2" --memory="4g" \
+            -v "$PWD:/src" \
+            aquasec/trivy:0.49.1 \
+            fs /src --scanners vuln,misconfig \
+              --format json \
+              --output /src/results/raw/trivy-fs.json || exit 1
+
+      - name: Check for critical SCA findings
+        run: |
+          CRITICAL_COUNT=$(jq '.Results | map(select(.Severity=="CRITICAL")) | length' results/raw/trivy-fs.json)
+          echo "Critical findings: $CRITICAL_COUNT"
+          if [ "$CRITICAL_COUNT" -gt 0 ]; then
+            echo "Critical SCA findings found, aborting workflow."
+            exit 1
+          fi
+
+      - name: Upload SCA report
+        uses: actions/upload-artifact@v4
+        with:
+          name: sca-report
+          path: results/raw/trivy-fs.json
+          if-no-files-found: warn
+
+  # -------------------
+  # Secrets - Gitleaks
+  # -------------------
+  secrets:
+    runs-on: self-hosted
+    needs: sca
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Run Gitleaks
+        run: |
+          docker run --rm \
+            --cpus="1" --memory="2g" \
+            -v "$PWD:/src" \
+            zricethezav/gitleaks detect \
+              --source=/src \
+              --report-format json \
+              --report-path /src/results/raw/gitleaks.json \
+              --no-git || exit 1
+
+      - name: Check for critical Secrets findings
+        run: |
+          CRITICAL_COUNT=$(jq '.Leaks | length' results/raw/gitleaks.json)
+          echo "Critical secrets leaks: $CRITICAL_COUNT"
+          if [ "$CRITICAL_COUNT" -gt 0 ]; then
+            echo "Critical secrets leaks found, aborting workflow."
+            exit 1
+          fi
+
+      - name: Upload Gitleaks report
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: results/raw/gitleaks.json
+          if-no-files-found: warn
+
+  # -------------------
+  # DAST - ZAP Baseline Scan
+  # -------------------
+  dast:
+    runs-on: self-hosted
+    needs: secrets
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Start Vulnerable Flask App
+        run: |
+          docker rm -f vfa || true
+          docker run -d --name vfa -p 5000:5000 videvelopers/vulnerable-flask-app
+
+      - name: Wait for Flask App
+        run: |
+          for i in {1..30}; do
+            if curl -s http://localhost:5000 > /dev/null; then
+              echo "Flask App ready for DAST"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Flask App did not start in time"
+          exit 1
+
+      - name: Run ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.15.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          docker_name: ghcr.io/zaproxy/zaproxy:stable
+          target: http://localhost:5000
+          cmd_options: "-a"
+          fail_action: true
+          artifact_name: zap_baseline_scan
+
+      - name: Cleanup Flask App
+        run: docker rm -f vfa || true
+
+  # -------------------
+  # Optional IAST - Bandit + Integration Tests
+  # -------------------
+  iast:
+    runs-on: self-hosted
+    needs: dast
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Set up Python & Bandit for IAST
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run Bandit as IAST-Light
+        run: |
+          pip install bandit
+          bandit -r . -f json -o results/raw/bandit-iast.json || exit 1
+
+      - name: Upload IAST report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-iast-report
+          path: results/raw/bandit-iast.json
+          if-no-files-found: warn
