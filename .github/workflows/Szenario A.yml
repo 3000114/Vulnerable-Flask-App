@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+# -----------------------------------
+# Szenario A – Alles parallel
+# -----------------------------------
 jobs:
 
   # -------------------
@@ -112,13 +115,14 @@ jobs:
 
       - name: Start Vulnerable Flask App
         run: |
-          nohup python vulnerable-flask-app-linux.py > flask.log 2>&1 &
+          # Start explicitly on 0.0.0.0:5000
+          nohup python vulnerable-flask-app-linux.py --host 0.0.0.0 --port 5000 > flask.log 2>&1 &
           sleep 5
 
       - name: Wait for Flask App
         run: |
           for i in {1..20}; do
-            if curl -s http://localhost:8081 > /dev/null; then
+            if curl -s http://localhost:5000 > /dev/null; then
               echo "Flask App ready for DAST"
               exit 0
             fi
@@ -131,7 +135,7 @@ jobs:
       - name: ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.15.0
         with:
-          target: http://localhost:8081
+          target: http://localhost:5000
           docker_name: ghcr.io/zaproxy/zaproxy:stable
           cmd_options: "-a"
           fail_action: false
