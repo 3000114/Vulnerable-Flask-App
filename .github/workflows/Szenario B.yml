@@ -56,7 +56,7 @@ jobs:
   # SCA - Trivy FS
   # -------------------
   sca:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: sast
     steps:
       - name: Checkout repo
@@ -86,7 +86,7 @@ jobs:
   # Secrets - Gitleaks
   # -------------------
   secrets:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: sca
     steps:
       - name: Checkout repo
@@ -117,7 +117,7 @@ jobs:
   # DAST - ZAP Baseline Scan
   # -------------------
   dast:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: secrets
     steps:
       - name: Checkout repo
@@ -157,7 +157,7 @@ jobs:
   # IAST (optional) - Bandit / Python runtime
   # -------------------
   iast:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: dast
     steps:
       - name: Checkout repo
