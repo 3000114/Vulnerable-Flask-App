@@ -112,7 +112,6 @@ jobs:
 
       - name: Start Vulnerable Flask App
         run: |
-          # Start Flask auf Port 8081
           nohup python vulnerable-flask-app-linux.py > flask.log 2>&1 &
           sleep 5
 
@@ -137,7 +136,9 @@ jobs:
           cmd_options: "-a"
           fail_action: false
           artifact_name: zap-baseline-report
-          create_issue: false   # <-- verhindert die GitHub-Issue Fehlermeldung
+          token: ${{ secrets.ZAP_GITHUB_TOKEN }}
+          allow_issue_writing: true
+          issue_title: "ZAP Scan Baseline Report"
 
       - name: Upload Flask logs
         if: always()
