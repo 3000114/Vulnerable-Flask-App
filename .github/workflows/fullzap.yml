@@ -1,4 +1,4 @@
-name: scenario-a-full-zap-flask
+name: fullzap
 
 on:
   workflow_dispatch:
